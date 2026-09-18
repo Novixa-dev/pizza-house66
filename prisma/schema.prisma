@@ -1,0 +1,196 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Restaurant {
+  id                     String         @id @default(cuid())
+  nameAr                 String         @default("بيتزا هاوس")
+  nameEn                 String         @default("Pizza House")
+  slug                   String         @unique @default("pizza-house-mukalla")
+  phone                  String         @default("05375561")
+  whatsapp               String         @default("+967772207788")
+  addressAr              String         @default("المكلا - فوه - حي المساكن - بالقرب من جامعة الأحقاف ومستوصف النور")
+  addressEn              String         @default("Mukalla, Fuwa, Al-Masaken District, Near Al-Ahgaff University")
+  currency               String         @default("YER")
+  isOnlineOrderingPaused Boolean        @default(false)
+  pauseMessageAr         String?
+  pauseMessageEn         String?
+  defaultPrepDuration    Int            @default(15) // minutes
+  slotCapacityMax        Int            @default(8)  // orders per 15-min window
+  businessHours          BusinessHour[]
+  categories             Category[]
+  products               Product[]
+  orders                 Order[]
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+}
+
+model BusinessHour {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  dayOfWeek    Int        // 0 = Sunday, 1 = Monday, ..., 5 = Friday, 6 = Saturday
+  shiftName    String     // "Morning" or "Evening"
+  openTime     String     // e.g. "08:00" or "16:00"
+  closeTime    String     // e.g. "12:00" or "23:30"
+  isClosed     Boolean    @default(false)
+}
+
+model Category {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  nameAr       String
+  nameEn       String
+  slug         String     @unique
+  iconName     String?
+  sortOrder    Int        @default(0)
+  isActive     Boolean    @default(true)
+  products     Product[]
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
+
+model Product {
+  id            String        @id @default(cuid())
+  restaurantId  String
+  restaurant    Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  categoryId    String
+  category      Category      @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  nameAr        String
+  nameEn        String
+  descriptionAr String
+  descriptionEn String
+  basePrice     Int           // in YER integer
+  imageUrl      String
+  isAvailable   Boolean       @default(true)
+  isFeatured    Boolean       @default(false)
+  sortOrder     Int           @default(0)
+  optionGroups  OptionGroup[]
+  orderItems    OrderItem[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+}
+
+model OptionGroup {
+  id          String       @id @default(cuid())
+  productId   String
+  product     Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  nameAr      String
+  nameEn      String
+  type        String       // "RADIO" or "CHECKBOX"
+  isRequired  Boolean      @default(false)
+  minSelect   Int          @default(0)
+  maxSelect   Int          @default(1)
+  options     OptionItem[]
+}
+
+model OptionItem {
+  id            String      @id @default(cuid())
+  optionGroupId String
+  optionGroup   OptionGroup @relation(fields: [optionGroupId], references: [id], onDelete: Cascade)
+  nameAr        String
+  nameEn        String
+  priceDelta    Int         @default(0) // in YER (+0, +1000, etc.)
+  isAvailable   Boolean     @default(true)
+}
+
+model Order {
+  id                  String      @id @default(cuid())
+  orderNumber         String      @unique // e.g. "#PH-1024"
+  restaurantId        String
+  restaurant          Restaurant  @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  customerName        String
+  customerPhone       String
+  pickupMode          String      @default("SCHEDULED") // "ASAP" or "SCHEDULED"
+  requestedPickupTime DateTime
+  plannedPrepStartTime DateTime
+  actualPrepStartTime DateTime?
+  readyTime           DateTime?
+  completedTime       DateTime?
+  status              String      @default("PENDING") // PENDING, PAYMENT_PENDING, CONFIRMED, QUEUED, PREPARING, READY, COMPLETED, CANCELLED, REJECTED
+  subtotal            Int         // in YER
+  discount            Int         @default(0)
+  total               Int         // in YER
+  notes               String?
+  trackingToken       String      @default(cuid())
+  items               OrderItem[]
+  payment             Payment?
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+}
+
+model OrderItem {
+  id            String            @id @default(cuid())
+  orderId       String
+  order         Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId     String
+  product       Product           @relation(fields: [productId], references: [id])
+  productNameAr String
+  productNameEn String
+  unitPrice     Int               // Snapshotted price at order time
+  quantity      Int               @default(1)
+  subtotal      Int               // (unitPrice + options) * quantity
+  itemNotes     String?
+  options       OrderItemOption[]
+}
+
+model OrderItemOption {
+  id          String    @id @default(cuid())
+  orderItemId String
+  orderItem   OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  groupNameAr String
+  groupNameEn String
+  nameAr      String
+  nameEn      String
+  priceDelta  Int       @default(0)
+}
+
+model Payment {
+  id              String          @id @default(cuid())
+  orderId         String          @unique
+  order           Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  method          String          // "PAY_AT_PICKUP", "TRANSFER_KURAIMI", "TRANSFER_AMQI", "TRANSFER_BUSAIRI"
+  status          String          @default("UNPAID") // UNPAID, PENDING_VERIFICATION, VERIFIED, REJECTED
+  amount          Int             // in YER
+  referenceNumber String?
+  verifiedAt      DateTime?
+  verifiedBy      String?
+  rejectReason    String?
+  receipt         PaymentReceipt?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+}
+
+model PaymentReceipt {
+  id         String   @id @default(cuid())
+  paymentId  String   @unique
+  payment    Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  fileUrl    String
+  fileName   String
+  mimeType   String
+  fileSize   Int
+  uploadedAt DateTime @default(now())
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actor     String   @default("system")
+  action    String
+  entity    String
+  entityId  String
+  metadata  String?  // JSON stringified
+  createdAt DateTime @default(now())
+}
+
+model AnalyticsEvent {
+  id        String   @id @default(cuid())
+  eventType String
+  metadata  String?  // JSON stringified
+  createdAt DateTime @default(now())
+}
