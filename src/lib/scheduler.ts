@@ -95,6 +95,11 @@ export function generatePickupSlots({
     const shiftEnd = new Date(targetDate);
     shiftEnd.setHours(close.hours, close.minutes, 0, 0);
 
+    // If shift closes past midnight (e.g. 00:30, close.hours < open.hours), advance shiftEnd by 1 day
+    if (close.hours < open.hours) {
+      shiftEnd.setDate(shiftEnd.getDate() + 1);
+    }
+
     // Stop taking orders 30 minutes before shift closing
     const lastOrderTime = new Date(shiftEnd.getTime() - 30 * 60 * 1000);
 

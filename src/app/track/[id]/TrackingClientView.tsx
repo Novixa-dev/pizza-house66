@@ -15,6 +15,7 @@ import {
   RotateCw,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { cancelCustomerOrderAction } from "@/app/actions/orderActions";
 
 interface TrackingClientViewProps {
   order: any;
@@ -24,6 +25,31 @@ export default function TrackingClientView({ order }: TrackingClientViewProps) {
   const { language, dict } = useApp();
   const router = useRouter();
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+
+  const handleCancelOrder = async () => {
+    const confirmMsg =
+      language === "ar"
+        ? "هل أنت متأكد من رغبتك في إلغاء هذا الطلب؟"
+        : "Are you sure you want to cancel this order?";
+    if (!window.confirm(confirmMsg)) return;
+
+    setIsCancelling(true);
+    setCancelError(null);
+    try {
+      const res = await cancelCustomerOrderAction(order.id, order.trackingToken);
+      if (res.success) {
+        router.refresh();
+      } else {
+        setCancelError(res.error || "تعذر إلغاء الطلب.");
+      }
+    } catch {
+      setCancelError("حدث خطأ أثناء الاتصال بالخادم.");
+    } finally {
+      setIsCancelling(false);
+    }
+  };
 
   // Auto-refresh every 15 seconds to poll status changes
   useEffect(() => {
@@ -281,6 +307,21 @@ export default function TrackingClientView({ order }: TrackingClientViewProps) {
           <Phone className="w-4 h-4" />
           <span>{dict.tracking.helpWhatsApp}</span>
         </a>
+
+        {["PENDING", "PAYMENT_PENDING", "QUEUED"].includes(order.status) && (
+          <div className="pt-2">
+            {cancelError && (
+              <p className="text-xs text-red-500 mb-2">{cancelError}</p>
+            )}
+            <button
+              onClick={handleCancelOrder}
+              disabled={isCancelling}
+              className="text-xs text-red-600 dark:text-red-400 hover:underline font-bold disabled:opacity-50"
+            >
+              {isCancelling ? "جاري الإلغاء..." : "إلغاء هذا الطلب"}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

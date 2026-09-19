@@ -26,11 +26,70 @@ export default async function HomePage() {
     },
   });
 
+  const restaurantSchema = {
+    "@context": "https://schema.org",
+    "@type": "Restaurant",
+    name: "بيتزا هاوس | Pizza House Mukalla",
+    image: "https://pizzahouse.ye/hero-pizza.jpg",
+    "@id": "https://pizzahouse.ye/#restaurant",
+    url: "https://pizzahouse.ye",
+    telephone: "+9675375561",
+    servesCuisine: ["Pizza", "Pastries", "Italian", "Middle Eastern"],
+    priceRange: "$$",
+    address: {
+      "@type": "PostalAddress",
+      streetAddress: "حي المساكن، فوه، بالقرب من جامعة الأحقاف ومستوصف النور",
+      addressLocality: "المكلا (Mukalla)",
+      addressRegion: "حضرموت (Hadhramaut)",
+      addressCountry: "YE",
+    },
+    geo: {
+      "@type": "GeoCoordinates",
+      latitude: 14.5321,
+      longitude: 49.1245,
+    },
+    openingHoursSpecification: [
+      {
+        "@type": "OpeningHoursSpecification",
+        dayOfWeek: [
+          "Saturday",
+          "Sunday",
+          "Monday",
+          "Tuesday",
+          "Wednesday",
+          "Thursday",
+        ],
+        opens: "08:00",
+        closes: "12:00",
+      },
+      {
+        "@type": "OpeningHoursSpecification",
+        dayOfWeek: [
+          "Saturday",
+          "Sunday",
+          "Monday",
+          "Tuesday",
+          "Wednesday",
+          "Thursday",
+          "Friday",
+        ],
+        opens: "16:00",
+        closes: "23:30",
+      },
+    ],
+  };
+
   return (
-    <HomeClientView
-      restaurant={restaurant}
-      featuredProducts={restaurant?.products || []}
-      categories={restaurant?.categories || []}
-    />
+    <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(restaurantSchema) }}
+      />
+      <HomeClientView
+        restaurant={restaurant}
+        featuredProducts={restaurant?.products || []}
+        categories={restaurant?.categories || []}
+      />
+    </>
   );
 }

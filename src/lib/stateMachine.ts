@@ -52,8 +52,8 @@ export const ORDER_TRANSITION_MAP: Record<OrderStatus, StateTransitionRule> = {
     description: "ساخن وجاهز للتسليم في الفرع",
   },
   COMPLETED: {
-    allowedNextStates: [], // Terminal state
-    allowedRoles: [],
+    allowedNextStates: ["PREPARING"], // MUTATION TEST: Should fail tests/stateMachine.test.ts
+    allowedRoles: ["ADMIN"],
     description: "تم التسليم بنجاح",
   },
   CANCELLED: {

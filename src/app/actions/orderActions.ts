@@ -14,9 +14,13 @@ import {
   setStaffSessionCookie,
   clearStaffSessionCookie,
   getStaffSession,
+  checkPinRateLimit,
+  recordFailedPinAttempt,
+  resetPinAttempts,
   StaffRole,
 } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import fs from "fs";
 import path from "path";
 
@@ -142,9 +146,18 @@ export async function createOrderAction(rawInput: unknown) {
       requestedPickupTime = new Date(now);
       requestedPickupTime.setHours(h, m, 0, 0);
 
-      // If requested time has already passed today, error
-      if (requestedPickupTime.getTime() < now.getTime()) {
-        return { success: false, error: "وقت الاستلام المحدد قد مضى." };
+      // Validate that requested pickup time provides at least minimum prep duration
+      const earliestAllowed = calculateEarliestPickup(
+        now,
+        restaurant.defaultPrepDuration,
+        5
+      );
+
+      if (requestedPickupTime.getTime() < earliestAllowed.getTime()) {
+        return {
+          success: false,
+          error: "وقت الاستلام المحدد لا يتيح وقتاً كافياً لتحضير وخبز البيتزا (الحد الأدنى 20 دقيقة).",
+        };
       }
     }
 
@@ -547,18 +560,44 @@ export async function toggleProductAvailabilityAction(
 }
 
 /**
- * Staff authentication action via PIN.
+ * Staff authentication action via PIN with brute-force rate limiting.
  */
 export async function loginStaffAction(pin: string, targetRole: StaffRole) {
   try {
-    const verification = verifyPinForRole(pin, targetRole);
-    if (!verification.success || !verification.role) {
+    const headersList = headers();
+    const clientIp =
+      headersList.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+      headersList.get("x-real-ip") ||
+      "unknown-client";
+
+    // 1. Check if client IP is currently locked out
+    const rateLimitCheck = checkPinRateLimit(clientIp);
+    if (rateLimitCheck.isLocked) {
       return {
         success: false,
-        error: "الرمز السري المدخل غير صحيح.",
+        error: `تم حظر المحاولات مؤقتاً لتكرار إدخال الرمز غير الصحيح. يرجى الانتظار ${rateLimitCheck.remainingLockoutMinutes} دقيقة.`,
       };
     }
 
+    // 2. Timing-safe PIN verification
+    const verification = verifyPinForRole(pin, targetRole);
+    if (!verification.success || !verification.role) {
+      const attempt = recordFailedPinAttempt(clientIp);
+      if (attempt.isNowLocked) {
+        return {
+          success: false,
+          error:
+            "تم تجاوز الحد الأقصى للمحاولات (5 محاولات). تم حظر إدخال الرمز مؤقتاً لمدة 15 دقيقة لحماية النظام.",
+        };
+      }
+      return {
+        success: false,
+        error: `الرمز السري المدخل غير صحيح. (المحاولات المتبقية: ${attempt.remainingAttempts})`,
+      };
+    }
+
+    // 3. Reset rate limit counter on success & issue HTTP-only cookie
+    resetPinAttempts(clientIp);
     setStaffSessionCookie(verification.role);
 
     return {
@@ -568,6 +607,73 @@ export async function loginStaffAction(pin: string, targetRole: StaffRole) {
   } catch (err) {
     console.error("Staff login failed:", err);
     return { success: false, error: "تعذر تسجيل الدخول." };
+  }
+}
+
+/**
+ * Customer self-cancellation:
+ * Allows a customer holding the tracking token to cancel their order
+ * strictly BEFORE preparation begins in the kitchen.
+ */
+export async function cancelCustomerOrderAction(
+  orderId: string,
+  trackingToken: string,
+  cancelReason?: string
+) {
+  try {
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+    });
+
+    if (!order) {
+      return { success: false, error: "الطلب غير موجود." };
+    }
+
+    if (order.trackingToken !== trackingToken) {
+      return {
+        success: false,
+        error: "رمز التتبع غير صالح. غير مصرح بإلغاء هذا الطلب.",
+      };
+    }
+
+    // Only allow cancellation if order has not yet entered the kitchen oven
+    if (["PREPARING", "READY", "COMPLETED"].includes(order.status)) {
+      return {
+        success: false,
+        error: "نعتذر، لا يمكن إلغاء الطلب بعد دخوله مرحلة الخبز في الفرن.",
+      };
+    }
+
+    if (order.status === "CANCELLED") {
+      return { success: false, error: "الطلب ملغي مسبقاً." };
+    }
+
+    await prisma.order.update({
+      where: { id: orderId },
+      data: { status: "CANCELLED" },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        actor: `Customer (${order.customerName})`,
+        action: "ORDER_CANCELLED_BY_CUSTOMER",
+        entity: "Order",
+        entityId: orderId,
+        metadata: JSON.stringify({
+          orderNumber: order.orderNumber,
+          cancelReason: cancelReason || "Customer self-cancelled before prep",
+        }),
+      },
+    });
+
+    revalidatePath("/kitchen");
+    revalidatePath("/admin");
+    revalidatePath(`/track/${orderId}`);
+
+    return { success: true };
+  } catch (err) {
+    console.error("Failed to cancel customer order:", err);
+    return { success: false, error: "تعذر استكمال إلغاء الطلب." };
   }
 }
 

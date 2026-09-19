@@ -15,6 +15,85 @@ const ROLE_PINS: Record<StaffRole, string> = {
   CASHIER: process.env.CASHIER_PIN || "4096",
 };
 
+// Brute-force rate limiting: In-memory sliding window
+interface RateLimitEntry {
+  attempts: number;
+  lockedUntil?: number;
+}
+
+const loginAttempts = new Map<string, RateLimitEntry>();
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes lockout
+
+/**
+ * Timing-safe string comparison to prevent timing side-channel attacks.
+ */
+function constantTimeCompare(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+/**
+ * Checks if an identifier (e.g. IP or role) is currently locked out from PIN attempts.
+ */
+export function checkPinRateLimit(identifier: string): {
+  isLocked: boolean;
+  remainingLockoutMinutes?: number;
+} {
+  const now = Date.now();
+  const entry = loginAttempts.get(identifier);
+
+  if (!entry) return { isLocked: false };
+
+  if (entry.lockedUntil && now < entry.lockedUntil) {
+    const remainingMinutes = Math.ceil((entry.lockedUntil - now) / (60 * 1000));
+    return { isLocked: true, remainingLockoutMinutes: remainingMinutes };
+  }
+
+  // If lockout has elapsed, reset attempts
+  if (entry.lockedUntil && now >= entry.lockedUntil) {
+    loginAttempts.delete(identifier);
+    return { isLocked: false };
+  }
+
+  return { isLocked: false };
+}
+
+/**
+ * Records a failed PIN attempt. Triggers a 15-minute lockout on the 5th failed attempt.
+ */
+export function recordFailedPinAttempt(identifier: string): {
+  isNowLocked: boolean;
+  remainingAttempts: number;
+} {
+  const now = Date.now();
+  const entry = loginAttempts.get(identifier) || { attempts: 0 };
+  entry.attempts += 1;
+
+  if (entry.attempts >= MAX_FAILED_ATTEMPTS) {
+    entry.lockedUntil = now + LOCKOUT_DURATION_MS;
+    loginAttempts.set(identifier, entry);
+    return { isNowLocked: true, remainingAttempts: 0 };
+  }
+
+  loginAttempts.set(identifier, entry);
+  return {
+    isNowLocked: false,
+    remainingAttempts: MAX_FAILED_ATTEMPTS - entry.attempts,
+  };
+}
+
+/**
+ * Resets failed attempts after successful authentication.
+ */
+export function resetPinAttempts(identifier: string): void {
+  loginAttempts.delete(identifier);
+}
+
 /**
  * Generates an HMAC signature for a payload.
  */
@@ -56,7 +135,7 @@ export function verifyStaffToken(
   const payload = `${roleStr}:${timestampStr}`;
   const expectedSignature = signPayload(payload);
 
-  if (signature !== expectedSignature) {
+  if (!constantTimeCompare(signature, expectedSignature)) {
     return { isValid: false };
   }
 
@@ -69,7 +148,7 @@ export function verifyStaffToken(
 }
 
 /**
- * Verifies if entered PIN matches role.
+ * Verifies if entered PIN matches role using constant-time comparison.
  * Also allows ADMIN PIN to unlock any role.
  */
 export function verifyPinForRole(
@@ -79,11 +158,11 @@ export function verifyPinForRole(
   const trimmed = pin.trim();
 
   // Admin PIN unlocks everything
-  if (trimmed === ROLE_PINS.ADMIN) {
+  if (constantTimeCompare(trimmed, ROLE_PINS.ADMIN)) {
     return { success: true, role: "ADMIN" };
   }
 
-  if (trimmed === ROLE_PINS[targetRole]) {
+  if (constantTimeCompare(trimmed, ROLE_PINS[targetRole])) {
     return { success: true, role: targetRole };
   }
 
