@@ -12,8 +12,20 @@ export default async function OrderTrackingPage({
   params: { id: string };
   searchParams: { token?: string };
 }) {
-  const order = await prisma.order.findUnique({
-    where: { id: params.id },
+  const cleanParam = decodeURIComponent(params.id || "").trim();
+  const withHash = cleanParam.startsWith("#") ? cleanParam : `#${cleanParam}`;
+  const withoutHash = cleanParam.replace(/^#/, "");
+
+  const order = await prisma.order.findFirst({
+    where: {
+      OR: [
+        { id: cleanParam },
+        { orderNumber: cleanParam },
+        { orderNumber: withHash },
+        { orderNumber: withoutHash },
+        { trackingToken: cleanParam },
+      ],
+    },
     include: {
       items: {
         include: {
@@ -32,5 +44,11 @@ export default async function OrderTrackingPage({
     notFound();
   }
 
-  return <TrackingClientView order={order} />;
+  // If customer phone is present, mask it for privacy (e.g. 77****788)
+  const maskedOrder = {
+    ...order,
+    customerPhone: order.customerPhone.replace(/(\d{2})\d+(\d{3})/, "$1****$2"),
+  };
+
+  return <TrackingClientView order={maskedOrder} />;
 }

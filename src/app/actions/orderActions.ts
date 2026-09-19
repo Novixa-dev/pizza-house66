@@ -7,8 +7,83 @@ import {
   calculateEarliestPickup,
   calculateKitchenReleaseTime,
 } from "@/lib/scheduler";
-import { OrderStatus } from "@/types";
+import { validateOrderTransition, OrderStatus } from "@/lib/stateMachine";
+import {
+  isAuthorizedStaff,
+  verifyPinForRole,
+  setStaffSessionCookie,
+  clearStaffSessionCookie,
+  getStaffSession,
+  StaffRole,
+} from "@/lib/auth";
 import { revalidatePath } from "next/cache";
+import fs from "fs";
+import path from "path";
+
+/**
+ * Saves a base64 data URI receipt to disk safely.
+ * Returns the public relative URL or null if invalid.
+ */
+async function saveReceiptImage(base64DataUri?: string): Promise<{
+  fileUrl: string;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+} | null> {
+  if (!base64DataUri || !base64DataUri.startsWith("data:image/")) {
+    return null;
+  }
+
+  try {
+    const match = base64DataUri.match(/^data:(image\/(jpeg|png|webp|jpg));base64,(.+)$/);
+    if (!match) return null;
+
+    const mimeType = match[1] === "image/jpg" ? "image/jpeg" : match[1];
+    const ext = mimeType === "image/png" ? "png" : mimeType === "image/webp" ? "webp" : "jpg";
+    const buffer = Buffer.from(match[3], "base64");
+
+    const uploadsDir = path.join(process.cwd(), "public", "uploads", "receipts");
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+
+    const uniqueId = `${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const fileName = `receipt_${uniqueId}.${ext}`;
+    const filePath = path.join(uploadsDir, fileName);
+
+    fs.writeFileSync(filePath, buffer);
+
+    return {
+      fileUrl: `/uploads/receipts/${fileName}`,
+      fileName,
+      mimeType,
+      fileSize: buffer.length,
+    };
+  } catch (err) {
+    console.error("Failed to save receipt image to disk:", err);
+    return null;
+  }
+}
+
+/**
+ * Generates a collision-free human-readable order number.
+ */
+async function generateOrderNumber(): Promise<string> {
+  const count = await prisma.order.count();
+  let candidate = `#PH-${1024 + count}`;
+
+  const exists = await prisma.order.findUnique({
+    where: { orderNumber: candidate },
+  });
+
+  if (!exists) {
+    return candidate;
+  }
+
+  // Fallback if collision occurs (e.g. concurrent inserts)
+  const randomSalt = Math.random().toString(36).substring(2, 5).toUpperCase();
+  return `#PH-${1024 + count}-${randomSalt}`;
+}
 
 /**
  * Creates a new order authoritatively on the server.
@@ -43,7 +118,7 @@ export async function createOrderAction(rawInput: unknown) {
       };
     }
 
-    // 2. Authoritatively recalculate financial totals and validate items
+    // 2. Authoritatively recalculate financial totals and validate items & options
     const calculation = await calculateAuthoritativeOrder(data.items);
     if (!calculation.isValid) {
       return { success: false, error: calculation.errorMessage };
@@ -73,20 +148,17 @@ export async function createOrderAction(rawInput: unknown) {
       }
     }
 
-    // Calculate Planned Prep Start
+    // Calculate Planned Prep Start (Release Time)
     const plannedPrepStartTime = calculateKitchenReleaseTime(
       requestedPickupTime,
       restaurant.defaultPrepDuration,
       5
     );
 
-    // 4. Generate unique human-readable Order Number
-    const count = await prisma.order.count();
-    const orderNumber = `#PH-${1024 + count}`;
+    // 4. Save receipt image to disk if uploaded
+    const savedReceipt = await saveReceiptImage(data.receiptUrl);
 
-    // Initial status:
-    // If Pay at Pickup: CONFIRMED (or QUEUED if scheduled for later)
-    // If Bank Transfer: PAYMENT_PENDING until verified
+    // Initial status determined deterministically
     let initialStatus = "CONFIRMED";
     let paymentStatus = "UNPAID";
 
@@ -100,7 +172,10 @@ export async function createOrderAction(rawInput: unknown) {
       }
     }
 
-    // 5. Atomic transaction creating order, items, options, and payment
+    // 5. Generate unique human-readable Order Number
+    const orderNumber = await generateOrderNumber();
+
+    // 6. Atomic transaction creating order, items, options, and payment
     const newOrder = await prisma.$transaction(async (tx) => {
       const order = await tx.order.create({
         data: {
@@ -142,13 +217,13 @@ export async function createOrderAction(rawInput: unknown) {
               status: paymentStatus,
               amount: calculation.total,
               referenceNumber: data.referenceNumber,
-              receipt: data.receiptUrl
+              receipt: savedReceipt
                 ? {
                     create: {
-                      fileUrl: data.receiptUrl,
-                      fileName: "receipt.jpg",
-                      mimeType: "image/jpeg",
-                      fileSize: 102400,
+                      fileUrl: savedReceipt.fileUrl,
+                      fileName: savedReceipt.fileName,
+                      mimeType: savedReceipt.mimeType,
+                      fileSize: savedReceipt.fileSize,
                     },
                   }
                 : undefined,
@@ -192,7 +267,7 @@ export async function createOrderAction(rawInput: unknown) {
 }
 
 /**
- * Updates an order status with state machine safeguards.
+ * Updates an order status with strict state machine and role authorization safeguards.
  */
 export async function updateOrderStatusAction(
   orderId: string,
@@ -200,11 +275,35 @@ export async function updateOrderStatusAction(
   actor = "staff"
 ) {
   try {
+    // 1. Authorization check: Staff must be authenticated
+    const session = getStaffSession();
+    if (!session.isAuthenticated || !session.role) {
+      return {
+        success: false,
+        error: "غير مصرح لك بتغيير حالة الطلب. يرجى تسجيل الدخول برمز الموظف.",
+      };
+    }
+
+    // 2. Fetch existing order
     const existing = await prisma.order.findUnique({ where: { id: orderId } });
     if (!existing) {
       return { success: false, error: "الطلب غير موجود." };
     }
 
+    // 3. State machine validation
+    const transitionCheck = validateOrderTransition(
+      existing.status,
+      newStatus,
+      session.role
+    );
+    if (!transitionCheck.isValid) {
+      return {
+        success: false,
+        error: transitionCheck.errorMessage || "الانتقال بين الحالات غير مسموح.",
+      };
+    }
+
+    // 4. Update timestamps appropriately
     const updates: Record<string, unknown> = { status: newStatus };
 
     if (newStatus === "PREPARING" && !existing.actualPrepStartTime) {
@@ -220,15 +319,17 @@ export async function updateOrderStatusAction(
       data: updates,
     });
 
+    // 5. Audit Log
     await prisma.auditLog.create({
       data: {
-        actor,
+        actor: `${actor} (${session.role})`,
         action: `STATUS_CHANGED_TO_${newStatus}`,
         entity: "Order",
         entityId: orderId,
         metadata: JSON.stringify({
           previousStatus: existing.status,
           newStatus,
+          role: session.role,
         }),
       },
     });
@@ -246,6 +347,7 @@ export async function updateOrderStatusAction(
 
 /**
  * Approves or rejects an uploaded bank transfer receipt.
+ * Restricted to CASHIER or ADMIN roles.
  */
 export async function verifyPaymentAction(
   orderId: string,
@@ -254,6 +356,19 @@ export async function verifyPaymentAction(
   reviewer = "الكاشير"
 ) {
   try {
+    // 1. Authorization check
+    const session = getStaffSession();
+    if (
+      !session.isAuthenticated ||
+      !session.role ||
+      !["ADMIN", "CASHIER"].includes(session.role)
+    ) {
+      return {
+        success: false,
+        error: "غير مصرح لك بمراجعة المدفوعات. يلزم صلاحية الكاشير أو الإدارة.",
+      };
+    }
+
     const order = await prisma.order.findUnique({
       where: { id: orderId },
       include: { payment: true },
@@ -261,6 +376,11 @@ export async function verifyPaymentAction(
 
     if (!order || !order.payment) {
       return { success: false, error: "بيانات الدفع غير متوفرة." };
+    }
+
+    // Prevent re-verifying already finalized payments
+    if (order.payment.status === "VERIFIED" && isApproved) {
+      return { success: false, error: "تم تأكيد هذا الإشعار مسبقاً." };
     }
 
     const now = new Date();
@@ -271,7 +391,7 @@ export async function verifyPaymentAction(
         data: {
           status: "VERIFIED",
           verifiedAt: now,
-          verifiedBy: reviewer,
+          verifiedBy: `${reviewer} (${session.role})`,
           rejectReason: null,
         },
       });
@@ -282,10 +402,14 @@ export async function verifyPaymentAction(
           ? "QUEUED"
           : "CONFIRMED";
 
-      await prisma.order.update({
-        where: { id: orderId },
-        data: { status: nextStatus },
-      });
+      // Validate state transition
+      const check = validateOrderTransition(order.status, nextStatus, session.role);
+      if (check.isValid) {
+        await prisma.order.update({
+          where: { id: orderId },
+          data: { status: nextStatus },
+        });
+      }
     } else {
       await prisma.payment.update({
         where: { orderId },
@@ -293,19 +417,22 @@ export async function verifyPaymentAction(
           status: "REJECTED",
           rejectReason: rejectReason || "الإشعار غير مطابق أو غير واضح.",
           verifiedAt: now,
-          verifiedBy: reviewer,
+          verifiedBy: `${reviewer} (${session.role})`,
         },
       });
 
-      await prisma.order.update({
-        where: { id: orderId },
-        data: { status: "REJECTED" },
-      });
+      const check = validateOrderTransition(order.status, "REJECTED", session.role);
+      if (check.isValid) {
+        await prisma.order.update({
+          where: { id: orderId },
+          data: { status: "REJECTED" },
+        });
+      }
     }
 
     await prisma.auditLog.create({
       data: {
-        actor: reviewer,
+        actor: `${reviewer} (${session.role})`,
         action: isApproved ? "PAYMENT_APPROVED" : "PAYMENT_REJECTED",
         entity: "Payment",
         entityId: order.payment.id,
@@ -326,12 +453,21 @@ export async function verifyPaymentAction(
 
 /**
  * Manager control: Toggles paused online ordering.
+ * Restricted to ADMIN role.
  */
 export async function togglePauseOrderingAction(
   isPaused: boolean,
   messageAr?: string
 ) {
   try {
+    const session = getStaffSession();
+    if (!session.isAuthenticated || session.role !== "ADMIN") {
+      return {
+        success: false,
+        error: "غير مصرح لك بإيقاف استقبال الطلبات. يلزم صلاحية مدير النظام.",
+      };
+    }
+
     const restaurant = await prisma.restaurant.findFirst();
     if (!restaurant) return { success: false, error: "المطعم غير موجود." };
 
@@ -340,6 +476,16 @@ export async function togglePauseOrderingAction(
       data: {
         isOnlineOrderingPaused: isPaused,
         pauseMessageAr: messageAr,
+      },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        actor: `Admin (${session.role})`,
+        action: isPaused ? "ORDERING_PAUSED" : "ORDERING_RESUMED",
+        entity: "Restaurant",
+        entityId: restaurant.id,
+        metadata: JSON.stringify({ isPaused, messageAr }),
       },
     });
 
@@ -355,16 +501,39 @@ export async function togglePauseOrderingAction(
 }
 
 /**
- * Manager control: Quick toggle product availability (Available vs Sold Out).
+ * Manager/Kitchen control: Quick toggle product availability (Available vs Sold Out).
+ * Restricted to ADMIN or KITCHEN role.
  */
 export async function toggleProductAvailabilityAction(
   productId: string,
   isAvailable: boolean
 ) {
   try {
+    const session = getStaffSession();
+    if (
+      !session.isAuthenticated ||
+      !session.role ||
+      !["ADMIN", "KITCHEN"].includes(session.role)
+    ) {
+      return {
+        success: false,
+        error: "غير مصرح لك بتعديل توفر الأصناف في القائمة.",
+      };
+    }
+
     await prisma.product.update({
       where: { id: productId },
       data: { isAvailable },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        actor: `Staff (${session.role})`,
+        action: isAvailable ? "PRODUCT_AVAILABLE" : "PRODUCT_86ED",
+        entity: "Product",
+        entityId: productId,
+        metadata: JSON.stringify({ isAvailable }),
+      },
     });
 
     revalidatePath("/menu");
@@ -374,5 +543,45 @@ export async function toggleProductAvailabilityAction(
   } catch (err) {
     console.error("Failed to toggle product availability:", err);
     return { success: false, error: "تعذر تحديث حالة الصنف." };
+  }
+}
+
+/**
+ * Staff authentication action via PIN.
+ */
+export async function loginStaffAction(pin: string, targetRole: StaffRole) {
+  try {
+    const verification = verifyPinForRole(pin, targetRole);
+    if (!verification.success || !verification.role) {
+      return {
+        success: false,
+        error: "الرمز السري المدخل غير صحيح.",
+      };
+    }
+
+    setStaffSessionCookie(verification.role);
+
+    return {
+      success: true,
+      role: verification.role,
+    };
+  } catch (err) {
+    console.error("Staff login failed:", err);
+    return { success: false, error: "تعذر تسجيل الدخول." };
+  }
+}
+
+/**
+ * Staff logout action.
+ */
+export async function logoutStaffAction() {
+  try {
+    clearStaffSessionCookie();
+    revalidatePath("/admin");
+    revalidatePath("/kitchen");
+    return { success: true };
+  } catch (err) {
+    console.error("Staff logout failed:", err);
+    return { success: false, error: "تعذر تسجيل الخروج." };
   }
 }

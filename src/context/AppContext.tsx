@@ -36,6 +36,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const savedLang = localStorage.getItem("ph_lang") as Language;
     if (savedLang === "ar" || savedLang === "en") {
       setLanguageState(savedLang);
+      document.documentElement.dir = savedLang === "ar" ? "rtl" : "ltr";
+      document.documentElement.lang = savedLang;
     }
     // Load theme from storage
     const savedTheme = localStorage.getItem("ph_theme") as "light" | "dark";

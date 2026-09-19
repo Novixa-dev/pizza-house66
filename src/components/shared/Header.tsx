@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import Link from "next/navigation";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useApp } from "@/context/AppContext";
 import {
@@ -70,7 +70,7 @@ export default function Header() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16 sm:h-20">
           {/* Brand Logo & Name */}
-          <a href="/" className="flex items-center gap-3 group">
+          <Link href="/" className="flex items-center gap-3 group">
             <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-gradient-to-br from-pizza-600 via-pizza-700 to-pizza-900 flex items-center justify-center text-white shadow-lg shadow-pizza-700/20 group-hover:scale-105 transition-transform">
               <Pizza className="w-6 h-6 sm:w-7 sm:h-7 text-amber-300" />
             </div>
@@ -87,14 +87,14 @@ export default function Header() {
                 {dict.brand.tagline}
               </p>
             </div>
-          </a>
+          </Link>
 
           {/* Desktop Nav Links */}
           <nav className="hidden md:flex items-center gap-1 lg:gap-2">
             {navLinks.map((link) => {
               const isActive = pathname === link.href;
               return (
-                <a
+                <Link
                   key={link.href}
                   href={link.href}
                   className={`px-3 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 ${
@@ -109,7 +109,7 @@ export default function Header() {
                       {link.badge}
                     </span>
                   )}
-                </a>
+                </Link>
               );
             })}
           </nav>
@@ -176,7 +176,7 @@ export default function Header() {
       {isMobileMenuOpen && (
         <div className="md:hidden border-t border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 px-4 pt-3 pb-5 space-y-1">
           {navLinks.map((link) => (
-            <a
+            <Link
               key={link.href}
               href={link.href}
               onClick={() => setIsMobileMenuOpen(false)}
@@ -190,7 +190,7 @@ export default function Header() {
                   </span>
                 )}
               </div>
-            </a>
+            </Link>
           ))}
           <div className="pt-3 border-t border-stone-200 dark:border-stone-800 text-xs text-stone-500 space-y-1">
             <p className="flex items-center gap-1">

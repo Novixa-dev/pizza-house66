@@ -132,6 +132,17 @@ export async function calculateAuthoritativeOrder(
       }
 
       for (const opt of selectedInGroup) {
+        if (!opt.isAvailable) {
+          return {
+            isValid: false,
+            errorMessage: `نعتذر، الخيار "${opt.nameAr}" في صنف "${product.nameAr}" غير متوفر حالياً.`,
+            subtotal: 0,
+            discount: 0,
+            total: 0,
+            items: [],
+          };
+        }
+
         unitPrice += opt.priceDelta;
         itemOptions.push({
           groupNameAr: group.nameAr,
