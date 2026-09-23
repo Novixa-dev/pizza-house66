@@ -11,7 +11,6 @@
 ### Core Value Proposition
 - **Scheduled Preparation Engine**: Automatically calculates oven release time based on customer pickup schedule ($T_{\text{release}} = T_{\text{pickup}} - T_{\text{prep}}$) to ensure pizza comes out of the oven sizzling hot at the exact minute the customer arrives.
 - **Arabic-First, RTL Native UX**: Built with warm, premium appetite-stimulating aesthetics (Deep Charcoal `#121214`, Warm Amber/Gold `#F59E0B`, Rich Crimson `#DC2626`).
-- **Zero-Friction Authentication**: Phone-based identity verification without passwords.
 - **Local Payment Architecture**: Supports Pay at Pickup (Cash) + Yemen local hawala/mobile wallets (Al-Kuraimi, Al-Amqi, Al-Busairi) with receipt voucher upload and cashier 1-click verification.
 - **Real-Time Kitchen Display System (KDS)**: 4-stage Kanban kitchen board (New, Scheduled, Baking, Ready) with sound alerts and urgency badges.
 - **Manager Operations Center**: Full control over emergency order pause, per-item 86ing (stock toggles), order management, receipt verification, and revenue metrics.
@@ -125,28 +124,43 @@ npm run start
 
 ---
 
-## 💰 Yemeni Payment Rails Configured
+## 💰 Payment Methods (accounts NOT yet confirmed)
 
-Pizza House Mukalla accepts cash at pickup alongside direct electronic transfers to verified local accounts:
+The payment **rails** are modelled and selectable at checkout. The **account numbers are not verified**
+and are shown in the UI as explicit placeholders until the restaurant confirms them.
 
-| Provider | Merchant Account Number | Beneficiary Name |
+| Provider | Merchant Account | Status |
 |---|---|---|
-| **Al-Kuraimi Bank (الكريمي)** | `PH-772207788` | بيتزا هاوس فوة المساكن |
-| **Al-Amqi Exchange (العمقي)** | `25401982` | بيتزا هاوس - المكلا |
-| **Al-Busairi Exchange (البصيري)**| `889104` | مطعم بيتزا هاوس |
-| **Pay at Pickup (نقداً عند الاستلام)** | N/A | Cashier counter at Fuwa branch |
+| **Al-Kuraimi Bank (الكريمي)** | — | ❗ OWNER INPUT REQUIRED |
+| **Al-Amqi Exchange (العمقي)** | — | ❗ OWNER INPUT REQUIRED |
+| **Al-Busairi Exchange (البصيري)** | — | ❗ OWNER INPUT REQUIRED |
+| **Pay at Pickup (نقداً عند الاستلام)** | N/A | Supported |
+
+> Earlier revisions of this file listed specific account numbers. They could not be verified against
+> any public source and have been removed. Never display an unconfirmed account number to a customer
+> who is about to transfer money to it.
 
 ---
 
-## 🧪 Automated Verification & Testing
+## 🧪 Testing Status
 
-The platform has undergone full end-to-end browser subagent testing verifying:
-1. RTL layout and Cairo typography rendering.
-2. Menu customization with price accumulation (Pepperoni Pizza Large + Mozzarella Stuffed Crust = 9,500 YER).
-3. Scheduled checkout order creation (`#PH-1027`).
-4. Real-time order tracking status updates.
-5. Kitchen KDS ticket lifecycle progression.
-6. Admin operations metrics calculation, product availability toggle, and receipt verification.
+**There are currently no automated tests in this repository** — no test runner is installed and no
+`tests/` directory exists. A previous revision of this file claimed full end-to-end browser testing
+had been completed; that claim was not supported by the repository contents and has been removed.
+
+Planned (see `docs/TESTING.md`):
+- Unit: pricing, pickup-time calculation, order state transitions.
+- Integration: order creation, payment verification, authorization.
+- E2E (Playwright): customer order → kitchen → ready → pickup, in both Arabic RTL and English LTR.
+
+---
+
+## ⚠️ Current Production Readiness
+
+This build is a **functional prototype**, not a deployable product. See `docs/SECURITY.md` for the
+audited control status. In short: there is no authentication, `/admin` and `/kitchen` are public,
+order tracking is vulnerable to IDOR, and receipt uploads are unvalidated. Do not expose this to the
+public internet in its current state.
 
 ---
 

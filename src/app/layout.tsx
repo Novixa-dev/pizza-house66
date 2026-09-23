@@ -43,6 +43,28 @@ export const metadata: Metadata = {
   },
 };
 
+/**
+ * Runs before first paint, so the page never flashes the wrong theme or the
+ * wrong text direction. Kept as a raw string because it must execute
+ * synchronously in <head> — a React effect runs too late and the flash is
+ * visible. Mirrors the storage keys used by AppContext.
+ */
+const themeAndDirectionScript = `
+(function () {
+  try {
+    var t = localStorage.getItem("ph_theme");
+    if (t === "dark" || (!t && matchMedia("(prefers-color-scheme: dark)").matches)) {
+      document.documentElement.classList.add("dark");
+    }
+    var l = localStorage.getItem("ph_lang");
+    if (l === "en") {
+      document.documentElement.lang = "en";
+      document.documentElement.dir = "ltr";
+    }
+  } catch (e) {}
+})();
+`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -50,6 +72,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ar" dir="rtl" className={`${cairo.variable} ${outfit.variable}`}>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeAndDirectionScript }} />
+      </head>
       <body className="font-cairo antialiased min-h-screen flex flex-col selection:bg-pizza-500 selection:text-white">
         <AppProvider>
           <Header />

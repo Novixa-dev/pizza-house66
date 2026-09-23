@@ -29,8 +29,7 @@ export default async function HomePage() {
   return (
     <HomeClientView
       restaurant={restaurant}
-      featuredProducts={restaurant?.products || []}
-      categories={restaurant?.categories || []}
+      featuredProducts={restaurant?.products ?? []}
     />
   );
 }

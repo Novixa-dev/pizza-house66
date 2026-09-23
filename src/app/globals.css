@@ -1,55 +1,66 @@
+/* Design tokens must be imported before the Tailwind layers that consume them. */
+@import "../styles/tokens.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
-  :root {
-    --bg-main: #fffdfa;
-    --bg-surface: #ffffff;
-    --bg-surface-raised: #fbf8f2;
-    --border-color: #eee8dc;
-    --text-main: #1c1917;
-    --text-muted: #78716c;
-  }
-
-  .dark {
-    --bg-main: #0c0b0a;
-    --bg-surface: #141312;
-    --bg-surface-raised: #1c1a17;
-    --border-color: #292622;
-    --text-main: #fafaf9;
-    --text-muted: #a8a29e;
+  html {
+    /* Stop iOS Safari inflating Arabic text in landscape. */
+    -webkit-text-size-adjust: 100%;
   }
 
   body {
-    background-color: var(--bg-main);
-    color: var(--text-main);
-    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    background-color: rgb(var(--surface-page));
+    color: rgb(var(--content-primary));
     -webkit-tap-highlight-color: transparent;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* One focus treatment, applied everywhere, never removed.
+   * :focus-visible keeps it off mouse clicks but on for keyboard users. */
+  :focus-visible {
+    outline: 2px solid rgb(var(--focus-ring));
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  /* Arabic numerals render inconsistently across weights in Cairo; force the
+   * lining tabular set so prices and times stay column-aligned in tables,
+   * receipts and the kitchen board. */
+  .tabular {
+    font-variant-numeric: tabular-nums lining-nums;
   }
 }
 
-/* Custom Scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: #d6d0c4;
-  border-radius: 9999px;
-}
-.dark ::-webkit-scrollbar-thumb {
-  background: #383531;
+@layer components {
+  /* Logical-property helpers. Tailwind's start/end utilities cover most cases,
+   * but these carry the intent where a raw physical value would break RTL. */
+  .flip-rtl:where([dir="rtl"] *) {
+    transform: scaleX(-1);
+  }
 }
 
-/* Pulse badge animation */
-@keyframes pulse-subtle {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.85; transform: scale(1.05); }
+/* Scrollbars — thin, neutral, token-driven so they follow the theme. */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--border-default));
+  border-radius: 9999px;
 }
-.animate-pulse-subtle {
-  animation: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--border-strong)); }
+
+/* Honour the OS-level reduced-motion preference. Animations in this product
+ * signal state (order moved, cart updated), so they are reduced to near-zero
+ * rather than removed outright — the state change still needs to register. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

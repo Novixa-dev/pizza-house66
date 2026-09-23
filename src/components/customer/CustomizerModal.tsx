@@ -14,6 +14,8 @@ export interface CustomizerProduct {
   basePrice: number;
   imageUrl: string;
   isAvailable: boolean;
+  /** Set by restaurant staff, not inferred from price. */
+  isFeatured?: boolean;
   optionGroups: {
     id: string;
     nameAr: string;

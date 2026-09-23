@@ -155,3 +155,45 @@ export function generatePickupSlots({
   // Sort slots chronologically
   return slots.sort((a, b) => a.timeString.localeCompare(b.timeString));
 }
+
+/**
+ * Is the restaurant serving at `now`, according to its configured shifts?
+ *
+ * Handles shifts that run past midnight (e.g. 16:00-00:30): when closeTime is
+ * less than or equal to openTime the shift is treated as spilling into the next
+ * day, and the check also considers yesterday's spill-over window.
+ */
+export function isOpenAt(
+  businessHours: BusinessHourRecord[],
+  now = new Date()
+): boolean {
+  const minutesNow = now.getHours() * 60 + now.getMinutes();
+  const today = now.getDay();
+  const yesterday = (today + 6) % 7;
+
+  const toMinutes = (t: string) => {
+    const [h, m] = t.split(":").map(Number);
+    return h * 60 + m;
+  };
+
+  for (const shift of businessHours) {
+    if (shift.isClosed) continue;
+
+    const open = toMinutes(shift.openTime);
+    const close = toMinutes(shift.closeTime);
+    const wrapsMidnight = close <= open;
+
+    if (!wrapsMidnight) {
+      if (shift.dayOfWeek === today && minutesNow >= open && minutesNow < close) {
+        return true;
+      }
+    } else {
+      // Evening portion, on the shift's own day.
+      if (shift.dayOfWeek === today && minutesNow >= open) return true;
+      // Small-hours portion, which belongs to the previous day's shift.
+      if (shift.dayOfWeek === yesterday && minutesNow < close) return true;
+    }
+  }
+
+  return false;
+}

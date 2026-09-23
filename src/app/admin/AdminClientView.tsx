@@ -391,7 +391,7 @@ export default function AdminClientView({
 
                 <div className="flex items-center gap-2">
                   <a
-                    href={`/track/${order.id}`}
+                    href={`/track/${order.id}?token=${order.trackingToken}`}
                     target="_blank"
                     rel="noreferrer"
                     className="p-2 text-stone-500 hover:text-stone-900 dark:hover:text-white rounded-lg hover:bg-stone-200 dark:hover:bg-stone-700"

@@ -1,7 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
-import Link from "next/navigation";
+import React, { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { useApp } from "@/context/AppContext";
 import {
@@ -11,12 +10,15 @@ import {
   Globe,
   Menu as MenuIcon,
   X,
-  Clock,
-  MapPin,
   Pizza,
-  ChefHat,
-  ShieldCheck,
 } from "lucide-react";
+import { cn } from "@/lib/cn";
+import { Container } from "@/components/ui/Card";
+
+interface ServingStatus {
+  isOpen: boolean | null;
+  isPaused: boolean;
+}
 
 export default function Header() {
   const {
@@ -30,179 +32,191 @@ export default function Header() {
   } = useApp();
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [status, setStatus] = useState<ServingStatus | null>(null);
   const pathname = usePathname();
 
+  // Open/closed is time-sensitive, so it is fetched rather than baked into a
+  // cached page. Until it arrives the badge renders nothing — claiming "open"
+  // by default would be a lie at 3am.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/status")
+      .then((r) => r.json())
+      .then((d) => {
+        if (!cancelled) setStatus(d);
+      })
+      .catch(() => {
+        /* badge stays hidden */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Customer-facing routes only. Staff surfaces (/admin, /kitchen) are reached
+  // directly by staff and must not be advertised in the public nav.
   const navLinks = [
     { href: "/", label: dict.nav.home },
     { href: "/menu", label: dict.nav.menu },
     { href: "/track", label: dict.nav.trackOrder },
-    { href: "/kitchen", label: dict.nav.kitchen, badge: "KDS" },
-    { href: "/admin", label: dict.nav.admin },
   ];
 
-  return (
-    <header className="sticky top-0 z-40 bg-white/95 dark:bg-stone-900/95 backdrop-blur-md border-b border-stone-200/80 dark:border-stone-800 transition-colors">
-      {/* Top micro bar for branch details & hours */}
-      <div className="bg-stone-900 text-stone-300 text-xs py-1.5 px-4 hidden md:block">
-        <div className="max-w-7xl mx-auto flex justify-between items-center">
-          <div className="flex items-center gap-4">
-            <span className="flex items-center gap-1.5">
-              <MapPin className="w-3.5 h-3.5 text-pizza-400" />
-              <span>{dict.brand.masaken} ({dict.brand.landmarks})</span>
-            </span>
-            <span className="text-stone-600">|</span>
-            <span className="flex items-center gap-1.5 text-pizza-300 font-medium">
-              <Clock className="w-3.5 h-3.5 text-crust-400" />
-              <span>4:00 م - 11:30 م (فترة المساء)</span>
-            </span>
-          </div>
-          <div className="flex items-center gap-3 text-stone-400">
-            <span className="inline-flex items-center gap-1 text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded-full text-[11px] font-medium border border-emerald-800/40">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-              {dict.brand.openNow}
-            </span>
-            <span>{dict.brand.phones}</span>
-          </div>
-        </div>
-      </div>
+  const closeMobile = () => setIsMobileMenuOpen(false);
 
-      {/* Main Navigation Bar */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16 sm:h-20">
-          {/* Brand Logo & Name */}
-          <a href="/" className="flex items-center gap-3 group">
-            <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-gradient-to-br from-pizza-600 via-pizza-700 to-pizza-900 flex items-center justify-center text-white shadow-lg shadow-pizza-700/20 group-hover:scale-105 transition-transform">
-              <Pizza className="w-6 h-6 sm:w-7 sm:h-7 text-amber-300" />
-            </div>
-            <div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-xl sm:text-2xl font-extrabold tracking-tight text-stone-900 dark:text-white font-cairo">
-                  {dict.brand.name}
-                </span>
-                <span className="text-xs bg-pizza-100 dark:bg-pizza-950 text-pizza-700 dark:text-pizza-300 px-1.5 py-0.5 rounded font-bold font-outfit">
-                  66
-                </span>
-              </div>
-              <p className="text-[11px] text-stone-500 dark:text-stone-400 hidden sm:block">
-                {dict.brand.tagline}
-              </p>
-            </div>
+  return (
+    <header className="sticky top-0 z-40 bg-surface border-b border-subtle">
+      <Container>
+        <div className="flex items-center justify-between h-16 sm:h-20 gap-4">
+          {/* Brand */}
+          <a
+            href="/"
+            className="flex items-center gap-2.5 rounded-control shrink-0"
+          >
+            <span
+              className="w-10 h-10 rounded-control bg-brand text-brand-content flex items-center justify-center shrink-0"
+              aria-hidden="true"
+            >
+              <Pizza className="w-5 h-5" />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-lg sm:text-xl font-bold tracking-tight text-content truncate">
+                {dict.brand.name}
+              </span>
+              <span className="hidden sm:block text-xs text-content-muted truncate">
+                {dict.brand.masaken}
+              </span>
+            </span>
           </a>
 
-          {/* Desktop Nav Links */}
-          <nav className="hidden md:flex items-center gap-1 lg:gap-2">
+          {/* Desktop nav */}
+          <nav className="hidden md:flex items-center gap-1">
             {navLinks.map((link) => {
               const isActive = pathname === link.href;
               return (
                 <a
                   key={link.href}
                   href={link.href}
-                  className={`px-3 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 ${
+                  aria-current={isActive ? "page" : undefined}
+                  className={cn(
+                    "px-3 py-2 rounded-control text-sm font-semibold transition-colors",
                     isActive
-                      ? "text-pizza-700 dark:text-pizza-400 bg-pizza-50 dark:bg-pizza-950/50"
-                      : "text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white hover:bg-stone-100 dark:hover:bg-stone-800"
-                  }`}
+                      ? "text-brand bg-brand-subtle"
+                      : "text-content-secondary hover:text-content hover:bg-surface-sunken"
+                  )}
                 >
                   {link.label}
-                  {link.badge && (
-                    <span className="text-[10px] font-bold bg-crust-500 text-stone-950 px-1.5 py-0.2 rounded font-outfit">
-                      {link.badge}
-                    </span>
-                  )}
                 </a>
               );
             })}
           </nav>
 
-          {/* Actions & Utilities */}
-          <div className="flex items-center gap-2 sm:gap-3">
-            {/* Language Switcher */}
+          {/* Actions */}
+          <div className="flex items-center gap-1 sm:gap-2">
+            {status && status.isOpen !== null && (
+              <span
+                className={cn(
+                  "hidden lg:inline-flex items-center gap-1.5 rounded-control px-2.5 py-1 text-xs font-semibold",
+                  status.isOpen
+                    ? "bg-status-ready-bg text-status-ready-fg"
+                    : "bg-status-done-bg text-status-done-fg"
+                )}
+              >
+                <span
+                  className={cn(
+                    "w-1.5 h-1.5 rounded-full bg-current",
+                    status.isOpen && "animate-status-pulse"
+                  )}
+                  aria-hidden="true"
+                />
+                {status.isOpen ? dict.brand.openNow : dict.brand.closedNow}
+              </span>
+            )}
+
             <button
+              type="button"
               onClick={() => setLanguage(language === "ar" ? "en" : "ar")}
-              className="p-2 rounded-lg text-stone-600 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800 text-xs font-bold font-outfit flex items-center gap-1"
-              title="تغيير اللغة / Switch Language"
-              aria-label="Switch Language"
+              className="inline-flex items-center gap-1.5 h-10 px-2.5 rounded-control text-sm font-semibold text-content-secondary hover:bg-surface-sunken hover:text-content transition-colors"
+              aria-label={language === "ar" ? "Switch to English" : "التبديل إلى العربية"}
             >
-              <Globe className="w-4 h-4" />
-              <span>{language === "ar" ? "EN" : "عربي"}</span>
+              <Globe className="w-4 h-4" aria-hidden="true" />
+              <span className="hidden sm:inline">
+                {language === "ar" ? "EN" : "ع"}
+              </span>
             </button>
 
-            {/* Dark / Light Mode Toggle */}
             <button
+              type="button"
               onClick={toggleTheme}
-              className="p-2 rounded-lg text-stone-600 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800"
-              title="تبديل المظهر"
-              aria-label="Toggle Theme"
+              className="inline-flex items-center justify-center w-10 h-10 rounded-control text-content-secondary hover:bg-surface-sunken hover:text-content transition-colors"
+              aria-label={
+                theme === "light"
+                  ? language === "ar" ? "الوضع الداكن" : "Dark mode"
+                  : language === "ar" ? "الوضع الفاتح" : "Light mode"
+              }
             >
               {theme === "light" ? (
-                <Moon className="w-4 h-4" />
+                <Moon className="w-5 h-5" aria-hidden="true" />
               ) : (
-                <Sun className="w-4 h-4 text-amber-400" />
+                <Sun className="w-5 h-5" aria-hidden="true" />
               )}
             </button>
 
-            {/* Cart Trigger */}
             <button
+              type="button"
               onClick={() => setIsCartOpen(true)}
-              className="relative flex items-center gap-2 bg-pizza-700 hover:bg-pizza-800 text-white px-3.5 py-2 rounded-xl text-sm font-bold shadow-md shadow-pizza-700/20 active:scale-95 transition-transform"
-              aria-label="Open Shopping Cart"
+              className="relative inline-flex items-center justify-center w-10 h-10 rounded-control text-content-secondary hover:bg-surface-sunken hover:text-content transition-colors"
+              aria-label={`${dict.nav.cart}${cartCount > 0 ? ` (${cartCount})` : ""}`}
             >
-              <ShoppingBag className="w-4 h-4" />
-              <span className="hidden sm:inline">{dict.nav.cart}</span>
+              <ShoppingBag className="w-5 h-5" aria-hidden="true" />
               {cartCount > 0 && (
-                <span className="w-5 h-5 rounded-full bg-amber-400 text-stone-950 text-xs font-black flex items-center justify-center font-outfit animate-pulse-subtle">
+                <span className="absolute -top-0.5 -end-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-brand text-brand-content text-2xs font-bold flex items-center justify-center tabular">
                   {cartCount}
                 </span>
               )}
             </button>
 
-            {/* Mobile Menu Toggle */}
             <button
-              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="p-2 md:hidden text-stone-700 dark:text-stone-200 hover:bg-stone-100 dark:hover:bg-stone-800 rounded-lg"
-              aria-label="Open Mobile Menu"
+              type="button"
+              onClick={() => setIsMobileMenuOpen((v) => !v)}
+              className="md:hidden inline-flex items-center justify-center w-10 h-10 rounded-control text-content-secondary hover:bg-surface-sunken transition-colors"
+              aria-expanded={isMobileMenuOpen}
+              aria-label={language === "ar" ? "القائمة" : "Menu"}
             >
               {isMobileMenuOpen ? (
-                <X className="w-6 h-6" />
+                <X className="w-5 h-5" aria-hidden="true" />
               ) : (
-                <MenuIcon className="w-6 h-6" />
+                <MenuIcon className="w-5 h-5" aria-hidden="true" />
               )}
             </button>
           </div>
         </div>
-      </div>
+      </Container>
 
-      {/* Mobile Menu Dropdown */}
+      {/* Mobile nav */}
       {isMobileMenuOpen && (
-        <div className="md:hidden border-t border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 px-4 pt-3 pb-5 space-y-1">
-          {navLinks.map((link) => (
-            <a
-              key={link.href}
-              href={link.href}
-              onClick={() => setIsMobileMenuOpen(false)}
-              className="block px-3 py-2.5 rounded-lg text-base font-bold text-stone-800 dark:text-stone-200 hover:bg-pizza-50 dark:hover:bg-stone-800"
-            >
-              <div className="flex items-center justify-between">
-                <span>{link.label}</span>
-                {link.badge && (
-                  <span className="text-xs bg-crust-500 text-stone-950 font-bold px-2 py-0.5 rounded font-outfit">
-                    {link.badge}
-                  </span>
-                )}
-              </div>
-            </a>
-          ))}
-          <div className="pt-3 border-t border-stone-200 dark:border-stone-800 text-xs text-stone-500 space-y-1">
-            <p className="flex items-center gap-1">
-              <MapPin className="w-3.5 h-3.5 text-pizza-600" />
-              <span>{dict.brand.masaken}</span>
-            </p>
-            <p className="flex items-center gap-1">
-              <Clock className="w-3.5 h-3.5 text-crust-500" />
-              <span>8:00 ص - 12:00 م | 4:00 م - 11:30 م</span>
-            </p>
-          </div>
-        </div>
+        <nav className="md:hidden border-t border-subtle bg-surface animate-slide-up">
+          <Container className="py-2">
+            {navLinks.map((link) => {
+              const isActive = pathname === link.href;
+              return (
+                <a
+                  key={link.href}
+                  href={link.href}
+                  onClick={closeMobile}
+                  aria-current={isActive ? "page" : undefined}
+                  className={cn(
+                    "block px-3 py-3 rounded-control text-sm font-semibold transition-colors",
+                    isActive
+                      ? "text-brand bg-brand-subtle"
+                      : "text-content-secondary hover:bg-surface-sunken"
+                  )}
+                >
+                  {link.label}
+                </a>
+              );
+            })}
+          </Container>
+        </nav>
       )}
     </header>
   );

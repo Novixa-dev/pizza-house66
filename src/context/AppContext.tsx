@@ -23,25 +23,36 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
+/** Keeps `dir` and `lang` on <html> in step with the active language. */
+function applyDirection(lang: Language) {
+  document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
+  document.documentElement.lang = lang;
+}
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [language, setLanguageState] = useState<Language>("ar");
   const [theme, setThemeState] = useState<"light" | "dark">("light");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
-  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    setMounted(true);
     // Load language from storage
     const savedLang = localStorage.getItem("ph_lang") as Language;
     if (savedLang === "ar" || savedLang === "en") {
       setLanguageState(savedLang);
+      // The pre-paint script in layout.tsx already set these, but restate them
+      // so the DOM stays correct if that script was blocked or storage changed
+      // in another tab.
+      applyDirection(savedLang);
     }
     // Load theme from storage
     const savedTheme = localStorage.getItem("ph_theme") as "light" | "dark";
     if (savedTheme === "light" || savedTheme === "dark") {
       setThemeState(savedTheme);
       document.documentElement.classList.toggle("dark", savedTheme === "dark");
+    } else if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+      // No stored choice: follow the OS, matching the pre-paint script.
+      setThemeState("dark");
     }
     // Load cart
     try {
@@ -57,8 +68,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const setLanguage = (lang: Language) => {
     setLanguageState(lang);
     localStorage.setItem("ph_lang", lang);
-    document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
-    document.documentElement.lang = lang;
+    applyDirection(lang);
   };
 
   const toggleTheme = () => {
