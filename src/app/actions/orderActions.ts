@@ -6,9 +6,48 @@ import { calculateAuthoritativeOrder } from "@/lib/pricing";
 import {
   calculateEarliestPickup,
   calculateKitchenReleaseTime,
+  generatePickupSlots,
 } from "@/lib/scheduler";
+import { validateReceiptDataUri } from "@/lib/receipt";
+import { canTransition, type StaffRole } from "@/lib/orderState";
 import { OrderStatus } from "@/types";
 import { revalidatePath } from "next/cache";
+
+/** Customer-facing reasons a receipt was refused. Never leaks internals. */
+const RECEIPT_ERRORS: Record<string, string> = {
+  MALFORMED: "تعذر قراءة صورة الإشعار. يرجى إرفاقها مرة أخرى.",
+  UNSUPPORTED_TYPE: "نوع الملف غير مدعوم. يرجى إرفاق صورة JPG أو PNG أو WEBP.",
+  TYPE_MISMATCH: "محتوى الملف لا يطابق نوعه. يرجى إرفاق صورة صالحة.",
+  TOO_LARGE: "حجم الصورة يجب ألا يتجاوز 5 ميجابايت.",
+};
+
+/**
+ * Counts live orders already booked into each HH:mm pickup slot for `day`.
+ * Cancelled and rejected orders free their slot back up.
+ */
+async function countOrdersPerSlot(day: Date): Promise<Record<string, number>> {
+  const startOfDay = new Date(day);
+  startOfDay.setHours(0, 0, 0, 0);
+  const endOfDay = new Date(day);
+  endOfDay.setHours(23, 59, 59, 999);
+
+  const orders = await prisma.order.findMany({
+    where: {
+      requestedPickupTime: { gte: startOfDay, lte: endOfDay },
+      status: { notIn: ["CANCELLED", "REJECTED"] },
+    },
+    select: { requestedPickupTime: true },
+  });
+
+  const counts: Record<string, number> = {};
+  for (const o of orders) {
+    const h = String(o.requestedPickupTime.getHours()).padStart(2, "0");
+    const m = String(o.requestedPickupTime.getMinutes()).padStart(2, "0");
+    const key = `${h}:${m}`;
+    counts[key] = (counts[key] || 0) + 1;
+  }
+  return counts;
+}
 
 /**
  * Creates a new order authoritatively on the server.
@@ -63,11 +102,36 @@ export async function createOrderAction(rawInput: unknown) {
       if (!data.requestedTime) {
         return { success: false, error: "يرجى تحديد وقت الاستلام المفضل." };
       }
+      // Re-derive the valid slots on the server. The client renders the same
+      // list, but a crafted request can name any time at all -- including one
+      // when the restaurant is shut or a window that is already full.
+      const slotCounts = await countOrdersPerSlot(now);
+      const validSlots = generatePickupSlots({
+        targetDate: now,
+        businessHours: restaurant.businessHours,
+        existingSlotOrdersCount: slotCounts,
+        slotCapacityMax: restaurant.slotCapacityMax,
+        now,
+      });
+
+      const match = validSlots.find((s) => s.timeString === data.requestedTime);
+      if (!match) {
+        return {
+          success: false,
+          error: "وقت الاستلام المحدد غير متاح. يرجى اختيار وقت آخر.",
+        };
+      }
+      if (!match.isAvailable) {
+        return {
+          success: false,
+          error: match.reason || "وقت الاستلام المحدد لم يعد متاحاً.",
+        };
+      }
+
       const [h, m] = data.requestedTime.split(":").map(Number);
       requestedPickupTime = new Date(now);
       requestedPickupTime.setHours(h, m, 0, 0);
 
-      // If requested time has already passed today, error
       if (requestedPickupTime.getTime() < now.getTime()) {
         return { success: false, error: "وقت الاستلام المحدد قد مضى." };
       }
@@ -80,9 +144,14 @@ export async function createOrderAction(rawInput: unknown) {
       5
     );
 
-    // 4. Generate unique human-readable Order Number
-    const count = await prisma.order.count();
-    const orderNumber = `#PH-${1024 + count}`;
+    // 4. Validate the payment receipt before anything is written.
+    let receipt: ReturnType<typeof validateReceiptDataUri> | null = null;
+    if (data.paymentMethod !== "PAY_AT_PICKUP") {
+      receipt = validateReceiptDataUri(data.receiptUrl);
+      if (!receipt.ok) {
+        return { success: false, error: RECEIPT_ERRORS[receipt.reason] };
+      }
+    }
 
     // Initial status:
     // If Pay at Pickup: CONFIRMED (or QUEUED if scheduled for later)
@@ -102,6 +171,12 @@ export async function createOrderAction(rawInput: unknown) {
 
     // 5. Atomic transaction creating order, items, options, and payment
     const newOrder = await prisma.$transaction(async (tx) => {
+      // Generated INSIDE the transaction. Computed outside it, two concurrent
+      // checkouts read the same count and produced the same number, and one
+      // failed on the unique constraint.
+      const count = await tx.order.count();
+      const orderNumber = `#PH-${1024 + count}`;
+
       const order = await tx.order.create({
         data: {
           orderNumber,
@@ -142,16 +217,18 @@ export async function createOrderAction(rawInput: unknown) {
               status: paymentStatus,
               amount: calculation.total,
               referenceNumber: data.referenceNumber,
-              receipt: data.receiptUrl
-                ? {
-                    create: {
-                      fileUrl: data.receiptUrl,
-                      fileName: "receipt.jpg",
-                      mimeType: "image/jpeg",
-                      fileSize: 102400,
-                    },
-                  }
-                : undefined,
+              receipt:
+                receipt && receipt.ok
+                  ? {
+                      create: {
+                        fileUrl: receipt.dataUri,
+                        // Measured from the payload, not claimed by the client.
+                        fileName: receipt.fileName,
+                        mimeType: receipt.mimeType,
+                        fileSize: receipt.fileSize,
+                      },
+                    }
+                  : undefined,
             },
           },
         },
@@ -165,7 +242,7 @@ export async function createOrderAction(rawInput: unknown) {
           entity: "Order",
           entityId: order.id,
           metadata: JSON.stringify({
-            orderNumber,
+            orderNumber: order.orderNumber,
             total: calculation.total,
             pickupMode: data.pickupMode,
             paymentMethod: data.paymentMethod,
@@ -197,12 +274,29 @@ export async function createOrderAction(rawInput: unknown) {
 export async function updateOrderStatusAction(
   orderId: string,
   newStatus: OrderStatus,
-  actor = "staff"
+  actor = "staff",
+  // TODO(auth): this role must come from the authenticated session once staff
+  // authentication exists. Until then the guard enforces the transition graph
+  // but cannot prove who the caller is -- see docs/SECURITY.md.
+  role: StaffRole = "MANAGER"
 ) {
   try {
     const existing = await prisma.order.findUnique({ where: { id: orderId } });
     if (!existing) {
       return { success: false, error: "الطلب غير موجود." };
+    }
+
+    // Reject illegal jumps (e.g. straight to COMPLETED) and any change to an
+    // order that has already reached a terminal state.
+    const check = canTransition(existing.status, newStatus, role);
+    if (!check.allowed) {
+      return {
+        success: false,
+        error:
+          check.reason === "TERMINAL"
+            ? "لا يمكن تعديل حالة طلب منتهٍ."
+            : "لا يمكن الانتقال إلى هذه الحالة.",
+      };
     }
 
     const updates: Record<string, unknown> = { status: newStatus };
